@@ -1,15 +1,104 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request, current_app
+from app.models.user import LoginPayload
+from pydantic import ValidationError
+from app import db
+from bson import ObjectId
+from app.models.products import *
+from app.decorators import token_required
+from datetime import datetime, timedelta, timezone
+import jwt
+
+
 
 main_bp = Blueprint('main_bp', __name__)
+
+# RF: O sistema deve permitir que um usuario se autentique para obter um token
+@main_bp.route('/login', methods=['POST'])
+def login():
+    try:
+        raw_data = request.get_json()
+        user_data = LoginPayload(**raw_data)
+    except ValidationError as e:
+        return jsonify({"error": e.errors()}), 400
+    except Exception as e:
+        return jsonify({"error": "Erro durante a requisição de login."})
+    
+    if user_data.username == "admin" and user_data.password == "supersecret":
+        token = jwt.encode(
+            {
+                "user_id": user_data.username,
+                "exp": datetime.now(timezone.utc) + timedelta(minutes=30)
+            },
+            current_app.config["SECRET_KEY"],
+            algorithm="HS256"
+        )
+
+        return jsonify({"acess_token": token}), 200
+    
+    return jsonify({"menssagem":"Credenciais inválidas!"}), 401
+
+
+# RF: O sistema deve permitir listagem de todos os produtos existentes
+@main_bp.route('/products', methods=['GET'])
+def get_products():
+    products_cursor = db.products.find({})
+    products_list = [ProductDbModel(**product).model_dump(by_alias=True, exclude_none=True) for product in products_cursor]
+    return jsonify({"produtos": products_list})
+
+
+# RF: O sistema deve permitir criação de um novo produto 
+@main_bp.route('/products', methods=['POST'])
+@token_required
+def create_product(token):
+    try:
+        product = Product(**request.get_json())    
+    except ValidationError as e:
+        return jsonify({"error": e.errors()})
+    
+    result = db.products.insert_one(product.model_dump())
+
+    return jsonify({"menssagem":"Esta é a rota de criação de um novo produto!",
+                    "id": str(result.inserted_id)}), 201
+
+    
+
+# RF: O sistema deve permitir a viasualização dos detalhes de um unico produto
+@main_bp.route('/product/<string:product_id>', methods=['GET'])
+def get_product_by_id(product_id):
+    try:
+        oid = ObjectId(product_id)
+    except Exception as e:
+        return jsonify({"error": f"Erro ao transformar o {product_id} em ObjectID: {e}"}), 500
+
+    product = db.products.find_one({"_id": oid})
+
+    if product:
+        product_model = ProductDbModel(**product).model_dump(by_alias=True, exclude_none=True)
+        return jsonify(product_model)
+    else:
+        return jsonify({"menssagem":f"produto com o id: {product_id} Não encontrado!"})
+
+
+# RF: O sistema deve permitir a autualização de um produto
+@main_bp.route('/product/<int:product_id>', methods=['PUT'])
+def update_product(product_id):
+    return jsonify({"menssagem":f"Esta é a rota de atualização do produto com o id: {product_id}"})
+
+
+# RF: O sistema deve permitir a deleção de um produto existente
+@main_bp.route('/product/<int:product_id>', methods=['DELETE'])
+def delete_product(product_id):
+    return jsonify({"menssagem":f"Esta é a rota de deleção do produto com o id: {product_id}"})
+
+
+# RF: O sistema deve permitir a importação de vendas através de um arquivo
+@main_bp.route('/sale/upload', methods=['POST'])
+def upload_sales():
+    return jsonify({"menssagem":"Esta é a rota de importação de vendas!"})
+
 
 @main_bp.route('/')
 def index():
     return jsonify({"menssagem":"bem vindo ao styleSync!"})
 
-@main_bp.route('/products')
-def get_products():
-    return jsonify({"menssagem":"Esta é a rota de listagem dos produtos!"})
 
-@main_bp.route('/login', methods=['POST'])
-def login():
-    return jsonify({"menssagem":"Esta é a rota de listagem dos produtos!"})
